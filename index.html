@@ -63,6 +63,40 @@
 </head>
 <body class="bg-misskey-lightBg text-slate-800 dark:bg-misskey-bg dark:text-slate-100 min-h-screen flex flex-col antialiased">
 
+    <!-- 451 Unavailable For Legal Reasons 専用画面（EU・UK 対象地域のみ表示） -->
+    <section id="unavailable-451-view" class="hidden flex-1 flex items-center justify-center p-4 sm:p-6 bg-misskey-lightBg dark:bg-misskey-bg" aria-live="polite">
+        <div class="max-w-lg w-full bg-misskey-lightPanel dark:bg-misskey-panel rounded-3xl shadow-xl border border-misskey-lightBorder dark:border-misskey-border p-6 sm:p-8 space-y-5">
+            <div class="flex items-center gap-3">
+                <div class="w-12 h-12 rounded-2xl bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 ring-1 ring-amber-500/25">
+                    <i data-lucide="shield-alert" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <p class="text-xs font-bold tracking-wider uppercase text-amber-600 dark:text-amber-400">HTTP 451</p>
+                    <h1 class="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white leading-tight">
+                        451 Unavailable For Legal Reasons
+                    </h1>
+                </div>
+            </div>
+
+            <div class="p-4 rounded-2xl bg-slate-50 dark:bg-misskey-bg border border-slate-200/80 dark:border-misskey-border text-sm text-slate-700 dark:text-slate-300 space-y-2.5 leading-relaxed">
+                <p class="font-semibold text-slate-900 dark:text-white">
+                    欧州連合（EU）および英国（イギリス）からのアクセスは制限されています
+                </p>
+                <p>
+                    本サービスは GDPR（一般データ保護規則）および UK GDPR 適用地域（EU 加盟国および英国）からの利用・登録を禁止しています。法的理由により、この地域からはご利用いただけません。
+                </p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">
+                    Access from EU member states and the United Kingdom (GDPR / UK GDPR) is unavailable for legal reasons.
+                </p>
+            </div>
+
+            <div class="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 pt-1">
+                <span>判定地域: <strong id="detected-region-code" class="text-slate-700 dark:text-slate-200">EU / UK</strong></span>
+                <span>Status: 451 Unavailable For Legal Reasons</span>
+            </div>
+        </div>
+    </section>
+
     <!-- 通知トーストコンテナ -->
     <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none px-4 sm:px-0"></div>
 
@@ -701,6 +735,79 @@
         const MAX_STORED_ARTICLES = 300;
         const FETCH_TIMEOUT_MS = 10000;
 
+        // GDPR / UK GDPR 適用対象（EU加盟国27カ国 + 英国）
+        const RESTRICTED_EU_UK_CODES = new Set([
+            'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR',
+            'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL',
+            'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE',
+            'GB', 'UK', 'EU'
+        ]);
+
+        const RESTRICTED_TIMEZONES = new Set([
+            'Europe/Amsterdam', 'Europe/Andorra', 'Europe/Athens', 'Europe/Belgrade',
+            'Europe/Berlin', 'Europe/Bratislava', 'Europe/Brussels', 'Europe/Bucharest',
+            'Europe/Budapest', 'Europe/Chisinau', 'Europe/Copenhagen', 'Europe/Dublin',
+            'Europe/Gibraltar', 'Europe/Guernsey', 'Europe/Helsinki', 'Europe/Isle_of_Man',
+            'Europe/Jersey', 'Europe/Lisbon', 'Europe/Ljubljana', 'Europe/London',
+            'Europe/Luxembourg', 'Europe/Madrid', 'Europe/Malta', 'Europe/Monaco',
+            'Europe/Nicosia', 'Europe/Oslo', 'Europe/Paris', 'Europe/Prague',
+            'Europe/Riga', 'Europe/Rome', 'Europe/San_Marino', 'Europe/Sofia',
+            'Europe/Stockholm', 'Europe/Tallinn', 'Europe/Tirane', 'Europe/Vaduz',
+            'Europe/Vatican', 'Europe/Vienna', 'Europe/Vilnius', 'Europe/Warsaw',
+            'Europe/Zagreb', 'Europe/Zurich', 'Atlantic/Canary', 'Atlantic/Faroe',
+            'Atlantic/Madeira', 'Atlantic/Reykjavik'
+        ]);
+
+        function detectRestrictedEuUkRegion() {
+            const params = new URLSearchParams(window.location.search);
+            const forced = (params.get('force_451') || '').trim();
+            if (forced === '1' || forced.toLowerCase() === 'true') {
+                return 'EU/UK (Preview)';
+            }
+
+            const overrideRegion = (params.get('region') || '').trim().toUpperCase();
+            if (overrideRegion) {
+                return RESTRICTED_EU_UK_CODES.has(overrideRegion) ? overrideRegion : null;
+            }
+
+            try {
+                const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+                if (RESTRICTED_TIMEZONES.has(tz)) {
+                    return tz;
+                }
+            } catch (e) {
+                // タイムゾーン取得不可時は無視
+            }
+
+            const langs = Array.isArray(navigator.languages) && navigator.languages.length > 0
+                ? navigator.languages
+                : [navigator.language || ''];
+            for (const lang of langs) {
+                const match = String(lang || '').toUpperCase().match(/[-_]([A-Z]{2,3})\b/);
+                if (match && RESTRICTED_EU_UK_CODES.has(match[1])) {
+                    return match[1];
+                }
+            }
+
+            return null;
+        }
+
+        function showUnavailable451Screen(regionLabel) {
+            document.title = '451 Unavailable For Legal Reasons - MiRSS';
+            const authView = document.getElementById('auth-view');
+            const appView = document.getElementById('app-view');
+            const view451 = document.getElementById('unavailable-451-view');
+            const regionEl = document.getElementById('detected-region-code');
+
+            if (authView) authView.classList.add('hidden');
+            if (appView) appView.classList.add('hidden');
+            if (regionEl && regionLabel) regionEl.textContent = regionLabel;
+            if (view451) {
+                view451.classList.remove('hidden');
+                refreshIcons(view451);
+            }
+        }
+
         // 指定コンテナ内のみアイコンを初期化（全DOM走査によるカクつき防止）
         function refreshIcons(rootEl = document) {
             if (!window.lucide) return;
@@ -724,6 +831,12 @@
         window.addEventListener('DOMContentLoaded', async () => {
             initTheme();
             refreshIcons(document);
+
+            const restrictedRegion = detectRestrictedEuUkRegion();
+            if (restrictedRegion) {
+                showUnavailable451Screen(restrictedRegion);
+                return;
+            }
 
             const urlParams = new URLSearchParams(window.location.search);
             const sessionParam = urlParams.get('session');
