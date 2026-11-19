@@ -40,7 +40,7 @@
         }
     </script>
     <style>
-        /* カスタムスクロールバー（ライト/ダーク両対応） */
+        <!-- カスタムスクロールバー（ライト/ダーク両対応） -->
         ::-webkit-scrollbar {
             width: 6px;
             height: 6px;
@@ -55,11 +55,11 @@
         ::-webkit-scrollbar-thumb:hover {
             background: rgba(148, 163, 184, 0.55);
         }
-        /* テーマ切り替え時の滑らかなトランジション */
+        /* カクつき防止のため、全要素への transition は色変化のみに限定 */
         body, header, aside, main, article, div, input, button {
-            transition-property: background-color, border-color, color, box-shadow;
-            transition-duration: 200ms;
-            transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+            transition-property: background-color, border-color, color;
+            transition-duration: 150ms;
+            transition-timing-function: ease-out;
         }
     </style>
 </head>
@@ -247,6 +247,15 @@
                             <i data-lucide="plus-circle" class="w-4 h-4 text-misskey"></i>
                             <span>RSSフィードを追加</span>
                         </button>
+                        <button onclick="exportUserBackup(); toggleUserDropdown();" class="w-full text-left px-4 py-2.5 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2.5">
+                            <i data-lucide="download" class="w-4 h-4 text-misskey"></i>
+                            <span>データをバックアップ (JSON)</span>
+                        </button>
+                        <label class="w-full text-left px-4 py-2.5 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2.5 cursor-pointer">
+                            <i data-lucide="upload" class="w-4 h-4 text-misskey"></i>
+                            <span>データを復元 (JSON)</span>
+                            <input type="file" id="import-json-input" accept="application/json" onchange="importUserBackup(event)" class="hidden">
+                        </label>
                         <button onclick="logout()" class="w-full text-left px-4 py-2.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 flex items-center gap-2.5">
                             <i data-lucide="log-out" class="w-4 h-4"></i>
                             <span>ログアウト</span>
@@ -375,6 +384,21 @@
                     </div>
                 </div>
 
+                <!-- 登録前プレビュー（サンプル表示） -->
+                <div class="rounded-xl bg-slate-50 dark:bg-misskey-bg/70 border border-slate-200/80 dark:border-misskey-border p-3 space-y-2">
+                    <div class="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                        <span class="font-semibold text-misskey">登録前プレビュー（サンプル）</span>
+                        <span>追加すると実フィードの記事を取得</span>
+                    </div>
+                    <div id="feed-preview-box" class="space-y-1.5 text-xs">
+                        <div class="p-2.5 rounded-lg bg-white dark:bg-misskey-panel border border-slate-200/70 dark:border-misskey-border/70">
+                            <div class="text-[11px] font-bold text-misskey">Zenn トレンド • プレビュー</div>
+                            <div class="font-bold text-slate-800 dark:text-slate-100 mt-0.5">MiAuthを使ったクライアントサイド認証とRSS取得の仕組み</div>
+                            <div class="text-slate-500 dark:text-slate-400 line-clamp-1 mt-0.5">フィードを追加すると実際のRSS/Atom記事がここに読み込まれます。</div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="flex justify-end gap-2 pt-2">
                     <button type="button" onclick="closeAddFeedModal()" class="px-4 py-2 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
                         キャンセル
@@ -461,13 +485,33 @@
         const AUTH_STORAGE_KEY = 'mirss_auth_session';
         const MIAUTH_PENDING_KEY = 'mirss_miauth_pending';
         const THEME_STORAGE_KEY = 'mirss_theme';
+        const MAX_STORED_ARTICLES = 500; // ストレージ肥大化防止の上限件数
+
+        // fetchにタイムアウトを付与するヘルパー
+        async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const res = await fetch(url, { ...options, signal: controller.signal });
+                return res;
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        // 指定コンテナ内のアイコンのみ軽量再描画（画面全体のDOM走査を防止）
+        function refreshIcons(container = document.body) {
+            if (window.lucide && typeof window.lucide.createIcons === 'function') {
+                window.lucide.createIcons({ root: container });
+            }
+        }
 
         /**
          * 初期化処理
          */
         window.addEventListener('DOMContentLoaded', async () => {
             initTheme();
-            lucide.createIcons();
+            refreshIcons();
 
             // 1. URLパラメータにMiAuthのコールバック（session）が含まれているか確認
             const urlParams = new URLSearchParams(window.location.search);
@@ -614,11 +658,11 @@
             document.getElementById('auth-loading-host').textContent = `接続先: https://${host}`;
 
             try {
-                const response = await fetch(`https://${host}/api/miauth/${sessionId}/check`, {
+                const response = await fetchWithTimeout(`https://${host}/api/miauth/${sessionId}/check`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({})
-                });
+                }, 12000);
 
                 if (!response.ok) throw new Error(`HTTPエラー: ${response.status}`);
                 const data = await response.json();
@@ -714,7 +758,7 @@
             }
 
             loadUserData();
-            lucide.createIcons();
+            refreshIcons(document.getElementById('app-view'));
         }
 
         function getUserDataKey() {
@@ -742,73 +786,157 @@
 
         function saveUserData() {
             if (!state.user) return;
-            localStorage.setItem(getUserDataKey(), JSON.stringify({
-                feeds: state.feeds,
-                articles: state.articles
-            }));
+            try {
+                // 新着順に並べた上で、お気に入り・未読を優先しつつ上限件数内に収める内部クリーンアップ
+                const sorted = [...state.articles].sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+                const prioritized = [
+                    ...sorted.filter(a => a.isStarred || !a.isRead),
+                    ...sorted.filter(a => !a.isStarred && a.isRead)
+                ];
+                const trimmedArticles = prioritized.slice(0, MAX_STORED_ARTICLES);
+                state.articles = trimmedArticles;
+
+                localStorage.setItem(getUserDataKey(), JSON.stringify({
+                    feeds: state.feeds,
+                    articles: state.articles,
+                    updatedAt: new Date().toISOString()
+                }));
+            } catch (err) {
+                console.error('ローカルストレージ保存エラー:', err);
+                showToast('ストレージ容量制限のため保存に失敗しました', 'error');
+            }
         }
 
+        // アカウントデータのJSONエクスポート（バックアップ）
+        function exportUserBackup() {
+            if (!state.user) return;
+            const payload = {
+                app: 'MiRSS',
+                version: 1,
+                exportedAt: new Date().toISOString(),
+                account: `${state.user.username}@${state.user.host}`,
+                feeds: state.feeds,
+                articles: state.articles
+            };
+            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `mirss-backup-${state.user.username}-${new Date().toISOString().slice(0, 10)}.json`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            showToast('バックアップJSONをダウンロードしました', 'success');
+        }
+
+        // アカウントデータのJSONインポート（復元・マージ）
+        async function importUserBackup(event) {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            if (!file || !state.user) return;
+
+            try {
+                const text = await file.text();
+                const parsed = JSON.parse(text);
+                if (!Array.isArray(parsed.feeds) || !Array.isArray(parsed.articles)) {
+                    throw new Error('無効なバックアップファイル形式です');
+                }
+
+                // 既存フィードとマージ
+                parsed.feeds.forEach(f => {
+                    if (f && f.url && !state.feeds.some(existing => existing.url === f.url)) {
+                        state.feeds.push({
+                            id: f.id || ('feed_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)),
+                            title: f.title || f.url,
+                            url: f.url
+                        });
+                    }
+                });
+
+                // 既存記事とマージ（既読・お気に入り状態を保持）
+                parsed.articles.forEach(art => {
+                    if (!art || !art.id) return;
+                    const existingIdx = state.articles.findIndex(a => a.id === art.id || (art.link && a.link === art.link));
+                    if (existingIdx === -1) {
+                        state.articles.push({
+                            id: art.id,
+                            feedId: art.feedId,
+                            title: art.title || '無題の記事',
+                            link: art.link || '',
+                            description: art.description || '',
+                            pubDate: art.pubDate || new Date().toISOString(),
+                            isRead: Boolean(art.isRead),
+                            isStarred: Boolean(art.isStarred)
+                        });
+                    } else {
+                        state.articles[existingIdx].isRead = state.articles[existingIdx].isRead || Boolean(art.isRead);
+                        state.articles[existingIdx].isStarred = state.articles[existingIdx].isStarred || Boolean(art.isStarred);
+                    }
+                });
+
+                saveUserData();
+                renderAll();
+                showToast('バックアップデータを復元しました', 'success');
+            } catch (err) {
+                console.error('インポートエラー:', err);
+                showToast(`復元失敗: ${err.message}`, 'error');
+            }
+        }
+
+        // 初回登録時は偽記事を入れず、初期フィードのみ登録（記事一覧には偽記事を表示しない）
         function setupInitialSampleFeeds() {
-            const sampleFeeds = [
+            state.feeds = [
                 { id: 'feed_zenn', title: 'Zenn トレンド', url: 'https://zenn.dev/feed' },
                 { id: 'feed_misskey', title: 'Misskey Hub お知らせ', url: 'https://misskey-hub.net/feed.xml' }
             ];
-
-            const now = Date.now();
-            const sampleArticles = [
-                {
-                    id: 'art_1',
-                    feedId: 'feed_misskey',
-                    title: 'MiRSSへようこそ！ライトモードとダークモードを切り替えて使えます',
-                    link: 'https://misskey-hub.net/',
-                    description: '右上の太陽・月アイコンからいつでもライトモードとダークモードを切り替えられます。左側の「フィードを追加」ボタンから、お気に入りのブログやニュースサイトのRSS URLを登録して購読を始めましょう。',
-                    pubDate: new Date(now - 1000 * 60 * 25).toISOString(),
-                    isRead: false,
-                    isStarred: true
-                },
-                {
-                    id: 'art_2',
-                    feedId: 'feed_zenn',
-                    title: 'GitHub Pagesで公開する静的WebアプリのMiAuth認証フロー解説',
-                    link: 'https://zenn.dev/',
-                    description: 'サーバーレスなフロントエンド構成（GitHub Pagesなど）でも、MisskeyのMiAuthを使えば安全にアカウント認証・登録とAPI連携が実現できます。',
-                    pubDate: new Date(now - 1000 * 60 * 60 * 2).toISOString(),
-                    isRead: false,
-                    isStarred: false
-                },
-                {
-                    id: 'art_3',
-                    feedId: 'feed_zenn',
-                    title: 'モダンなRSSリーダーのUI設計：未読管理と視認性の高いカードレイアウト',
-                    link: 'https://zenn.dev/',
-                    description: '長時間の閲覧でも目が疲れにくいダークテーマと、日中の屋外でもくっきり読めるライトテーマの両立について解説します。',
-                    pubDate: new Date(now - 1000 * 60 * 60 * 9).toISOString(),
-                    isRead: true,
-                    isStarred: false
-                }
-            ];
-
-            state.feeds = sampleFeeds;
-            state.articles = sampleArticles;
+            state.articles = [];
             saveUserData();
             renderAll();
+            // バックグラウンドで実フィードの取得を試行
+            refreshAllFeeds();
         }
 
         /**
          * ============================================================================
-         * RSS フィード取得・パース処理
+         * RSS フィード取得・パース処理（多段CORSプロキシフォールバック対応）
          * ============================================================================
          */
-        async function fetchAndParseRSS(feedUrl) {
-            const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(feedUrl)}`;
-            const response = await fetch(proxyUrl);
-            if (!response.ok) throw new Error('フィードの取得に失敗しました');
+        async function fetchRawFeedXml(feedUrl) {
+            const proxies = [
+                async (target) => {
+                    const res = await fetchWithTimeout(`https://api.allorigins.win/get?url=${encodeURIComponent(target)}`, {}, 9000);
+                    if (!res.ok) throw new Error(`AllOrigins HTTP ${res.status}`);
+                    const json = await res.json();
+                    if (!json.contents) throw new Error('AllOrigins empty contents');
+                    return json.contents;
+                },
+                async (target) => {
+                    const res = await fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(target)}`, {}, 9000);
+                    if (!res.ok) throw new Error(`CorsProxy HTTP ${res.status}`);
+                    return await res.text();
+                }
+            ];
 
-            const data = await response.json();
-            if (!data.contents) throw new Error('フィードの内容が空です');
+            let lastError = null;
+            for (const proxyFn of proxies) {
+                try {
+                    const xmlText = await proxyFn(feedUrl);
+                    if (xmlText && xmlText.trim().length > 0) {
+                        return xmlText;
+                    }
+                } catch (err) {
+                    lastError = err;
+                }
+            }
+            throw lastError || new Error('すべてのプロキシ経由でフィード取得に失敗しました');
+        }
+
+        async function fetchAndParseRSS(feedUrl) {
+            const rawXml = await fetchRawFeedXml(feedUrl);
 
             const parser = new DOMParser();
-            const xmlDoc = parser.parseFromString(data.contents, 'text/xml');
+            const xmlDoc = parser.parseFromString(rawXml, 'text/xml');
 
             if (xmlDoc.querySelector('parsererror')) {
                 throw new Error('有効なRSS/Atom形式ではありません');
@@ -994,6 +1122,7 @@
                 return;
             }
 
+            const fragment = document.createDocumentFragment();
             state.feeds.forEach(feed => {
                 const feedUnread = state.articles.filter(a => a.feedId === feed.id && !a.isRead).length;
                 const isActive = state.currentFilter === feed.id;
@@ -1018,10 +1147,11 @@
                         </button>
                     </div>
                 `;
-                feedListEl.appendChild(itemEl);
+                fragment.appendChild(itemEl);
             });
 
-            lucide.createIcons();
+            feedListEl.appendChild(fragment);
+            refreshIcons(feedListEl);
         }
 
         function renderArticles() {
@@ -1068,16 +1198,18 @@
                             <i data-lucide="inbox" class="w-6 h-6"></i>
                         </div>
                         <p class="font-semibold text-slate-700 dark:text-slate-300">表示する記事がありません</p>
-                        <p class="text-xs text-slate-500 mt-1">新しいRSSフィードを追加するか、フィルターを変更してみてください。</p>
+                        <p class="text-xs text-slate-500 mt-1">フィードの更新ボタンを押すか、新しいRSSフィードを追加してください。</p>
                     </div>
                 `;
-                lucide.createIcons();
+                refreshIcons(gridEl);
                 return;
             }
 
+            const feedMap = new Map(state.feeds.map(f => [f.id, f.title]));
+            const fragment = document.createDocumentFragment();
+
             filtered.forEach(article => {
-                const feed = state.feeds.find(f => f.id === article.feedId);
-                const feedName = feed ? feed.title : '不明なフィード';
+                const feedName = feedMap.get(article.feedId) || '不明なフィード';
                 const dateStr = formatRelativeDate(article.pubDate);
 
                 const card = document.createElement('article');
@@ -1115,10 +1247,11 @@
                         </div>
                     </div>
                 `;
-                gridEl.appendChild(card);
+                fragment.appendChild(card);
             });
 
-            lucide.createIcons();
+            gridEl.appendChild(fragment);
+            refreshIcons(gridEl);
         }
 
         function selectFilter(filter) {
@@ -1187,10 +1320,47 @@
         }
 
         function fillFeedPreset(url) {
-            document.getElementById('feed-url-input').value = url;
+            const input = document.getElementById('feed-url-input');
+            input.value = url;
+            updateFeedPreview(url);
         }
 
-        function openArticleModal(articleId) {
+        function updateFeedPreview(url) {
+            const box = document.getElementById('feed-preview-box');
+            if (!box) return;
+            const cleanUrl = (url || '').trim();
+            let label = '登録前プレビュー（サンプル）';
+            let sampleTitle = '登録するとこのフィードの最新記事が取得されます';
+            let sampleDesc = cleanUrl ? `対象URL: ${cleanUrl}` : 'RSS / Atom URL を入力するとここにプレビューが表示されます。';
+
+            if (cleanUrl.includes('zenn.dev')) {
+                label = 'Zenn トレンド プレビュー';
+                sampleTitle = 'Zenn フィードのサンプル記事プレビュー';
+                sampleDesc = '「追加する」を押すと Zenn の最新トレンド記事がタイムラインに読み込まれます。';
+            } else if (cleanUrl.includes('qiita.com')) {
+                label = 'Qiita 人気記事 プレビュー';
+                sampleTitle = 'Qiita フィードのサンプル記事プレビュー';
+                sampleDesc = '「追加する」を押すと Qiita の人気記事がタイムラインに読み込まれます。';
+            } else if (cleanUrl.includes('hatena.ne.jp')) {
+                label = 'はてブ IT プレビュー';
+                sampleTitle = 'はてなブックマーク IT のサンプル記事プレビュー';
+                sampleDesc = '「追加する」を押すとホットエントリーの記事がタイムラインに読み込まれます。';
+            }
+
+            box.innerHTML = `
+                <div class="p-2.5 rounded-lg bg-white dark:bg-misskey-panel border border-slate-200/70 dark:border-misskey-border/70">
+                    <div class="text-[11px] font-bold text-misskey">${escapeHtml(label)}</div>
+                    <div class="font-bold text-slate-800 dark:text-slate-100 mt-0.5">${escapeHtml(sampleTitle)}</div>
+                    <div class="text-slate-500 dark:text-slate-400 line-clamp-1 mt-0.5">${escapeHtml(sampleDesc)}</div>
+                </div>
+            `;
+        }
+
+        document.getElementById('feed-url-input').addEventListener('input', (e) => {
+            updateFeedPreview(e.target.value);
+        });
+
+        async function openArticleModal(articleId) {
             const article = state.articles.find(a => a.id === articleId);
             if (!article) return;
 
@@ -1203,6 +1373,7 @@
             }
 
             const feed = state.feeds.find(f => f.id === article.feedId);
+            const modalEl = document.getElementById('article-modal');
             document.getElementById('modal-feed-title').textContent = feed ? feed.title : 'RSSフィード';
             document.getElementById('modal-article-title').textContent = article.title;
             document.getElementById('modal-article-date').innerHTML = `<i data-lucide="clock" class="w-3.5 h-3.5"></i><span>${new Date(article.pubDate).toLocaleString('ja-JP')}</span>`;
@@ -1211,8 +1382,9 @@
             document.getElementById('misskey-note-comment').value = '';
 
             updateModalStarIcon(article.isStarred);
-            document.getElementById('article-modal').classList.remove('hidden');
-            lucide.createIcons();
+
+            modalEl.classList.remove('hidden');
+            refreshIcons(modalEl);
         }
 
         function closeArticleModal() {
@@ -1223,6 +1395,56 @@
         function toggleCurrentModalStar() {
             if (state.activeArticleId) {
                 toggleStar(state.activeArticleId);
+            }
+        }
+
+        function updateModalStarIcon(isStarred) {
+            const btn = document.getElementById('modal-star-btn');
+            if (isStarred) {
+                btn.classList.add('text-amber-400');
+                btn.classList.remove('text-slate-500');
+                btn.innerHTML = `<i data-lucide="star" class="w-4 h-4 fill-amber-400"></i>`;
+            } else {
+                btn.classList.remove('text-amber-400');
+                btn.classList.add('text-slate-500');
+                btn.innerHTML = `<i data-lucide="star" class="w-4 h-4"></i>`;
+            }
+            refreshIcons(btn);
+        }
+
+        async function shareToMisskey() {
+            const article = state.articles.find(a => a.id === state.activeArticleId);
+            if (!article || !state.user) return;
+
+            const comment = document.getElementById('misskey-note-comment').value.trim();
+            const noteText = `${comment ? comment + '\n\n' : ''}${article.title}\n${article.link}`;
+
+            const btn = document.getElementById('share-misskey-btn');
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = `<div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div><span>送信中...</span>`;
+
+            try {
+                if (state.user.isDemo) {
+                    await new Promise(r => setTimeout(r, 500));
+                    showToast('【デモ】Misskeyにノートを投稿しました！', 'success');
+                    document.getElementById('misskey-note-comment').value = '';
+                } else {
+                    const res = await fetch(`https://${state.user.host}/api/notes/create`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ i: state.user.token, text: noteText })
+                    });
+                    if (!res.ok) throw new Error(`APIエラー (${res.status})`);
+                    showToast(`${state.user.host} にノートを投稿しました！`, 'success');
+                    document.getElementById('misskey-note-comment').value = '';
+                }
+            } catch (error) {
+                showToast(`ノート投稿に失敗しました: ${error.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+                refreshIcons(btn);
             }
         }
 
@@ -1322,7 +1544,7 @@
             `;
 
             container.appendChild(toast);
-            lucide.createIcons();
+            refreshIcons(toast);
 
             requestAnimationFrame(() => {
                 toast.classList.remove('translate-y-2', 'opacity-0');
