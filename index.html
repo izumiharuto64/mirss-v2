@@ -902,19 +902,50 @@
          * RSS フィード取得・パース処理（多段CORSプロキシフォールバック対応）
          * ============================================================================
          */
+        function rss2JsonToXml(data, feedUrl) {
+            if (!data || data.status !== 'ok' || !Array.isArray(data.items)) {
+                throw new Error('rss2json 応答が不正です');
+            }
+            const feedTitle = escapeXmlText(data.feed?.title || feedUrl);
+            const itemsXml = data.items.slice(0, 15).map((item) => {
+                const title = escapeXmlText(item.title || '無題の記事');
+                const link = escapeXmlText(item.link || '');
+                const desc = escapeXmlText(item.description || item.content || '');
+                const pubDate = escapeXmlText(item.pubDate || new Date().toISOString());
+                const guid = escapeXmlText(item.guid || item.link || title);
+                return `<item><title>${title}</title><link>${link}</link><description>${desc}</description><pubDate>${pubDate}</pubDate><guid>${guid}</guid></item>`;
+            }).join('');
+            return `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>${feedTitle}</title>${itemsXml}</channel></rss>`;
+        }
+
+        function escapeXmlText(str) {
+            return String(str || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&apos;');
+        }
+
         async function fetchRawFeedXml(feedUrl) {
             const proxies = [
                 async (target) => {
+                    const res = await fetchWithTimeout(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`, {}, 9000);
+                    if (!res.ok) throw new Error(`AllOrigins Raw HTTP ${res.status}`);
+                    return await res.text();
+                },
+                async (target) => {
                     const res = await fetchWithTimeout(`https://api.allorigins.win/get?url=${encodeURIComponent(target)}`, {}, 9000);
-                    if (!res.ok) throw new Error(`AllOrigins HTTP ${res.status}`);
+                    if (!res.ok) throw new Error(`AllOrigins Get HTTP ${res.status}`);
                     const json = await res.json();
                     if (!json.contents) throw new Error('AllOrigins empty contents');
                     return json.contents;
                 },
                 async (target) => {
-                    const res = await fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(target)}`, {}, 9000);
-                    if (!res.ok) throw new Error(`CorsProxy HTTP ${res.status}`);
-                    return await res.text();
+                    const res = await fetchWithTimeout(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(target)}`, {}, 9000);
+                    if (!res.ok) throw new Error(`rss2json HTTP ${res.status}`);
+                    const json = await res.json();
+                    return rss2JsonToXml(json, target);
                 }
             ];
 
