@@ -50,11 +50,26 @@ BASE_URL = os.getenv("MIRSS_BASE_URL", f"http://{APP_HOST}:{APP_PORT}")
 DB_PATH = os.getenv("MIRSS_DB_PATH", "mirss.db")
 HTTP_TIMEOUT_SECONDS = float(os.getenv("MIRSS_HTTP_TIMEOUT", "12.0"))
 # 任意の事前APIキー／固定トークン指定用スロット（環境変数 MIRSS_MIAUTH_API_KEY で設定可能）
-MIAUTH_API_KEY = os.getenv("E1hyIdc6eh9hOzB9ZSH6mWJytl0MiPTC", "").strip()
+MIAUTH_API_KEY = os.getenv("MIRSS_MIAUTH_API_KEY", "").strip()
+
+# GDPR / UK GDPR 適用地域（EU加盟国 + イギリス）の国コード一覧
+BLOCKED_COUNTRY_CODES = {
+    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR",
+    "DE", "GR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL",
+    "PL", "PT", "RO", "SK", "SI", "ES", "SE",
+    "GB", "UK",
+}
+COUNTRY_CODE_HEADERS = (
+    "cf-ipcountry",
+    "x-country-code",
+    "x-geo-country",
+    "cloudfront-viewer-country",
+    "x-vercel-ip-country",
+)
 
 # データベース排他制御用ロック
 DB_LOCK = threading.Lock()
-MIAUTH_API_KEY = os.getenv("E1hyIdc6eh9hOzB9ZSH6mWJytl0MiPTC", "").strip()
+MIAUTH_API_KEY = os.getenv("MIRSS_MIAUTH_API_KEY", "").strip()
 
 
 # ==============================================================================
@@ -1537,6 +1552,31 @@ FRONTEND_HTML = """<!DOCTYPE html>
 # FastAPI アプリケーション・エンドポイント定義
 # ==============================================================================
 app = FastAPI(title="MiRSS Python Backend", version="1.0.0")
+
+
+def _extract_request_country_code(request: Request) -> str:
+    """リバースプロキシやCDNが付与する国コードヘッダーから国コードを抽出する。"""
+    for header_name in COUNTRY_CODE_HEADERS:
+        raw_val = request.headers.get(header_name, "").strip().upper()
+        if raw_val:
+            return raw_val
+    return ""
+
+
+@app.middleware("http")
+async def block_eu_and_uk_access(request: Request, call_next):
+    """EU諸国およびイギリス（GDPR / UK GDPR適用地域）からのアクセスをHTTP 415で拒否する。"""
+    country_code = _extract_request_country_code(request)
+    if country_code in BLOCKED_COUNTRY_CODES:
+        return JSONResponse(
+            status_code=415,
+            content={
+                "error": "Unsupported Region",
+                "detail": "Access from EU member states and the United Kingdom (GDPR / UK GDPR) is not supported.",
+                "country": country_code,
+            },
+        )
+    return await call_next(request)
 
 
 @app.get("/", response_class=HTMLResponse)
