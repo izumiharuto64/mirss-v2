@@ -1,0 +1,1360 @@
+<!DOCTYPE html>
+<html lang="ja" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MiRSS - Misskey連携 RSSリーダー</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Inter & Noto Sans JP -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'Noto Sans JP', 'sans-serif'],
+                    },
+                    colors: {
+                        misskey: {
+                            DEFAULT: '#86b300',
+                            hover: '#739900',
+                            light: '#a3d900',
+                            // ダークモード用パレット
+                            bg: '#16171a',
+                            panel: '#1f2125',
+                            border: '#2e3138',
+                            // ライトモード用パレット
+                            lightBg: '#f4f6f8',
+                            lightPanel: '#ffffff',
+                            lightBorder: '#e2e8f0'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* カスタムスクロールバー（ライト/ダーク両対応） */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.35);
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(148, 163, 184, 0.55);
+        }
+        /* テーマ切り替え時の滑らかなトランジション */
+        body, header, aside, main, article, div, input, button {
+            transition-property: background-color, border-color, color, box-shadow;
+            transition-duration: 200ms;
+            transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+        }
+    </style>
+</head>
+<body class="bg-misskey-lightBg text-slate-800 dark:bg-misskey-bg dark:text-slate-100 min-h-screen flex flex-col antialiased">
+
+    <!-- 通知トーストコンテナ -->
+    <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none px-4 sm:px-0"></div>
+
+    <!-- ==========================================
+         ログイン / MiAuth 認証画面
+         ========================================== -->
+    <div id="auth-view" class="flex-1 flex flex-col items-center justify-center p-4 relative">
+        <!-- 右上テーマ切り替えピルボタン（認証画面でもライト/ダーク確認可能） -->
+        <div class="absolute top-4 right-4 sm:top-6 sm:right-6">
+            <div class="inline-flex items-center p-1 rounded-2xl bg-white dark:bg-misskey-panel border border-misskey-lightBorder dark:border-misskey-border shadow-sm">
+                <button type="button" onclick="setTheme('light')" id="auth-theme-light" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition">
+                    <i data-lucide="sun" class="w-3.5 h-3.5"></i>
+                    <span>ライト</span>
+                </button>
+                <button type="button" onclick="setTheme('dark')" id="auth-theme-dark" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition">
+                    <i data-lucide="moon" class="w-3.5 h-3.5"></i>
+                    <span>ダーク</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="max-w-md w-full bg-misskey-lightPanel dark:bg-misskey-panel rounded-3xl shadow-xl shadow-slate-200/60 dark:shadow-black/40 border border-misskey-lightBorder dark:border-misskey-border p-6 sm:p-8">
+            <!-- ロゴ & ヘッダー -->
+            <div class="text-center mb-8">
+                <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-misskey/15 text-misskey mb-4 ring-1 ring-misskey/20">
+                    <i data-lucide="rss" class="w-8 h-8"></i>
+                </div>
+                <h1 class="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">MiRSS</h1>
+                <p class="text-sm text-slate-500 dark:text-slate-400 mt-1.5">
+                    Misskeyアカウントでログイン・登録できるRSSリーダー
+                </p>
+            </div>
+
+            <!-- 認証中ローディング表示（コールバック時） -->
+            <div id="auth-loading" class="hidden text-center py-8">
+                <div class="inline-block animate-spin rounded-full h-10 w-10 border-4 border-misskey border-t-transparent mb-4"></div>
+                <p class="font-medium text-slate-700 dark:text-slate-200">Misskeyの認証を確認しています...</p>
+                <p class="text-xs text-slate-500 mt-1" id="auth-loading-host"></p>
+            </div>
+
+            <!-- ログインフォーム -->
+            <form id="miauth-form" class="space-y-5">
+                <div>
+                    <label for="instance-input" class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                        Misskeyインスタンスのドメイン
+                    </label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400 text-sm select-none font-medium">
+                            https://
+                        </span>
+                        <input 
+                            type="text" 
+                            id="instance-input" 
+                            placeholder="misskey.io" 
+                            value="misskey.io"
+                            required
+                            class="w-full pl-16 pr-4 py-3 rounded-xl bg-slate-50 dark:bg-misskey-bg border border-slate-300 dark:border-misskey-border text-slate-900 dark:text-white focus:ring-2 focus:ring-misskey focus:border-misskey outline-none text-sm"
+                        >
+                    </div>
+                    <!-- よく使われるインスタンスのクイック選択 -->
+                    <div class="flex flex-wrap gap-1.5 mt-2.5">
+                        <button type="button" onclick="setInstance('misskey.io')" class="text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-misskey-bg hover:bg-misskey/15 hover:text-misskey dark:hover:bg-misskey/20 text-slate-600 dark:text-slate-400 font-medium">
+                            misskey.io
+                        </button>
+                        <button type="button" onclick="setInstance('misskey.design')" class="text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-misskey-bg hover:bg-misskey/15 hover:text-misskey dark:hover:bg-misskey/20 text-slate-600 dark:text-slate-400 font-medium">
+                            misskey.design
+                        </button>
+                        <button type="button" onclick="setInstance('nijimiss.moe')" class="text-xs px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-misskey-bg hover:bg-misskey/15 hover:text-misskey dark:hover:bg-misskey/20 text-slate-600 dark:text-slate-400 font-medium">
+                            nijimiss.moe
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 要求する権限の説明 -->
+                <div class="p-3.5 rounded-xl bg-slate-50 dark:bg-misskey-bg/70 border border-slate-200/80 dark:border-misskey-border text-xs text-slate-600 dark:text-slate-400 space-y-1.5">
+                    <div class="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                        <i data-lucide="shield-check" class="w-4 h-4 text-misskey"></i>
+                        MiAuthで連携する権限
+                    </div>
+                    <ul class="list-disc list-inside pl-1 space-y-0.5">
+                        <li>アカウント情報の読み取り（プロフィール表示用）</li>
+                        <li>ノートの作成（記事をMisskeyへシェアする機能用）</li>
+                    </ul>
+                </div>
+
+                <button 
+                    type="submit" 
+                    class="w-full py-3 px-4 rounded-xl bg-misskey hover:bg-misskey-hover text-white font-semibold shadow-md shadow-misskey/25 flex items-center justify-center gap-2 transform active:scale-[0.99]"
+                >
+                    <i data-lucide="log-in" class="w-5 h-5"></i>
+                    <span>MiAuthでログイン / 登録</span>
+                </button>
+            </form>
+
+            <!-- デモモード / UIプレビュー用ボタン -->
+            <div class="mt-6 pt-5 border-t border-slate-200 dark:border-misskey-border text-center">
+                <p class="text-xs text-slate-500 dark:text-slate-400 mb-2.5">
+                    認証なしでリーダー画面のUIを確認したい場合
+                </p>
+                <button 
+                    type="button" 
+                    onclick="loginDemoMode()"
+                    class="w-full py-2.5 px-4 rounded-xl border border-slate-300 dark:border-misskey-border bg-white dark:bg-misskey-bg/40 hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-medium text-slate-700 dark:text-slate-300 flex items-center justify-center gap-2"
+                >
+                    <i data-lucide="sparkles" class="w-4 h-4 text-misskey"></i>
+                    <span>デモアカウントでUIを試す</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==========================================
+         メインアプリケーション画面（ログイン後）
+         ========================================== -->
+    <div id="app-view" class="hidden flex-1 flex flex-col h-screen overflow-hidden">
+        <!-- トップナビゲーションバー -->
+        <header class="h-16 bg-misskey-lightPanel dark:bg-misskey-panel border-b border-misskey-lightBorder dark:border-misskey-border px-4 flex items-center justify-between shrink-0 z-20">
+            <div class="flex items-center gap-3">
+                <!-- モバイル用メニューボタン -->
+                <button id="mobile-menu-btn" onclick="toggleSidebar()" class="lg:hidden p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300">
+                    <i data-lucide="menu" class="w-5 h-5"></i>
+                </button>
+                <div class="flex items-center gap-2.5">
+                    <div class="w-9 h-9 rounded-xl bg-misskey/15 text-misskey flex items-center justify-center ring-1 ring-misskey/20">
+                        <i data-lucide="rss" class="w-5 h-5"></i>
+                    </div>
+                    <span class="font-bold text-lg tracking-tight text-slate-900 dark:text-white hidden sm:inline">MiRSS</span>
+                </div>
+            </div>
+
+            <!-- 検索バー -->
+            <div class="flex-1 max-w-md mx-3 sm:mx-4">
+                <div class="relative">
+                    <i data-lucide="search" class="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                    <input 
+                        type="text" 
+                        id="search-input"
+                        oninput="renderArticles()"
+                        placeholder="記事タイトルや内容を検索..." 
+                        class="w-full pl-10 pr-4 py-2 rounded-xl bg-slate-100 dark:bg-misskey-bg border border-transparent focus:border-misskey focus:bg-white dark:focus:bg-misskey-bg text-slate-900 dark:text-white outline-none text-sm"
+                    >
+                </div>
+            </div>
+
+            <!-- 右側アクション（更新・ライト/ダーク切替・ユーザープロフィール） -->
+            <div class="flex items-center gap-1.5 sm:gap-2.5">
+                <button onclick="refreshAllFeeds()" id="refresh-btn" title="すべてのフィードを更新" class="p-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300">
+                    <i data-lucide="refresh-cw" class="w-5 h-5"></i>
+                </button>
+
+                <!-- ライト/ダークモード切替セグメントボタン -->
+                <div class="flex items-center p-1 rounded-xl bg-slate-100 dark:bg-misskey-bg border border-slate-200/80 dark:border-misskey-border" title="カラーテーマ切り替え">
+                    <button type="button" onclick="setTheme('light')" id="nav-theme-light" class="p-1.5 rounded-lg text-xs font-medium flex items-center gap-1 transition" aria-label="ライトモード">
+                        <i data-lucide="sun" class="w-4 h-4"></i>
+                    </button>
+                    <button type="button" onclick="setTheme('dark')" id="nav-theme-dark" class="p-1.5 rounded-lg text-xs font-medium flex items-center gap-1 transition" aria-label="ダークモード">
+                        <i data-lucide="moon" class="w-4 h-4"></i>
+                    </button>
+                </div>
+                
+                <!-- ユーザーメニュー -->
+                <div class="relative" id="user-menu-container">
+                    <button onclick="toggleUserDropdown()" class="flex items-center gap-2 p-1.5 pr-2.5 sm:pr-3 rounded-xl bg-slate-50 dark:bg-misskey-bg/50 hover:bg-slate-100 dark:hover:bg-slate-800 border border-misskey-lightBorder dark:border-misskey-border">
+                        <img id="user-avatar" src="https://placehold.co/64x64/86b300/ffffff?text=M" alt="Avatar" class="w-7 h-7 rounded-lg object-cover">
+                        <div class="text-left hidden md:block">
+                            <div id="user-name" class="text-xs font-bold text-slate-800 dark:text-slate-100 leading-tight max-w-[100px] truncate">User</div>
+                            <div id="user-handle" class="text-[10px] text-slate-500 dark:text-slate-400 leading-tight max-w-[100px] truncate">@user@misskey.io</div>
+                        </div>
+                        <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-400"></i>
+                    </button>
+
+                    <!-- ドロップダウンメニュー -->
+                    <div id="user-dropdown" class="hidden absolute right-0 mt-2 w-60 bg-misskey-lightPanel dark:bg-misskey-panel rounded-2xl shadow-xl border border-misskey-lightBorder dark:border-misskey-border py-2 z-50">
+                        <div class="px-4 py-2.5 border-b border-slate-100 dark:border-misskey-border">
+                            <p id="dropdown-name" class="text-sm font-bold text-slate-900 dark:text-white truncate">User</p>
+                            <p id="dropdown-handle" class="text-xs text-slate-500 dark:text-slate-400 truncate">@user@misskey.io</p>
+                            <span id="demo-badge" class="hidden inline-block mt-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-misskey/15 text-misskey">デモモード動作中</span>
+                        </div>
+                        <button onclick="openAddFeedModal(); toggleUserDropdown();" class="w-full text-left px-4 py-2.5 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2.5">
+                            <i data-lucide="plus-circle" class="w-4 h-4 text-misskey"></i>
+                            <span>RSSフィードを追加</span>
+                        </button>
+                        <button onclick="logout()" class="w-full text-left px-4 py-2.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 flex items-center gap-2.5">
+                            <i data-lucide="log-out" class="w-4 h-4"></i>
+                            <span>ログアウト</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- メインコンテンツエリア（サイドバー + 記事一覧） -->
+        <div class="flex-1 flex overflow-hidden relative">
+            <!-- モバイル用オーバーレイ -->
+            <div id="sidebar-overlay" onclick="toggleSidebar()" class="hidden fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-20 lg:hidden"></div>
+
+            <!-- サイドバー（フィード一覧） -->
+            <aside id="sidebar" class="fixed lg:static inset-y-0 left-0 z-30 w-72 bg-misskey-lightPanel dark:bg-misskey-panel border-r border-misskey-lightBorder dark:border-misskey-border flex flex-col transform -translate-x-full lg:translate-x-0 transition-transform duration-200 ease-in-out">
+                <div class="p-4">
+                    <button onclick="openAddFeedModal()" class="w-full py-2.5 px-4 rounded-xl bg-misskey hover:bg-misskey-hover text-white font-semibold text-sm shadow-sm shadow-misskey/20 flex items-center justify-center gap-2">
+                        <i data-lucide="plus" class="w-4 h-4"></i>
+                        <span>フィードを追加</span>
+                    </button>
+                </div>
+
+                <!-- フィルターメニュー -->
+                <div class="px-3 space-y-1">
+                    <button onclick="selectFilter('all')" id="filter-all" class="filter-btn w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-semibold bg-misskey/15 text-misskey">
+                        <div class="flex items-center gap-2.5">
+                            <i data-lucide="layers" class="w-4 h-4"></i>
+                            <span>すべての記事</span>
+                        </div>
+                        <span id="count-all" class="text-xs px-2 py-0.5 rounded-full bg-misskey/20 font-bold">0</span>
+                    </button>
+                    <button onclick="selectFilter('unread')" id="filter-unread" class="filter-btn w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
+                        <div class="flex items-center gap-2.5">
+                            <i data-lucide="circle-dot" class="w-4 h-4"></i>
+                            <span>未読のみ</span>
+                        </div>
+                        <span id="count-unread" class="text-xs px-2 py-0.5 rounded-full bg-slate-200/80 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold">0</span>
+                    </button>
+                    <button onclick="selectFilter('starred')" id="filter-starred" class="filter-btn w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
+                        <div class="flex items-center gap-2.5">
+                            <i data-lucide="star" class="w-4 h-4"></i>
+                            <span>お気に入り</span>
+                        </div>
+                        <span id="count-starred" class="text-xs px-2 py-0.5 rounded-full bg-slate-200/80 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-semibold">0</span>
+                    </button>
+                </div>
+
+                <div class="px-6 pt-5 pb-2 flex items-center justify-between">
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">購読中のフィード</span>
+                </div>
+
+                <!-- 登録フィードリスト -->
+                <div id="feed-list" class="flex-1 overflow-y-auto px-3 pb-4 space-y-1">
+                    <!-- JSで動的に生成 -->
+                </div>
+            </aside>
+
+            <!-- 記事一覧 & リーダービュー -->
+            <main class="flex-1 flex flex-col overflow-hidden bg-misskey-lightBg dark:bg-misskey-bg">
+                <!-- サブヘッダー（現在のビュー名 & すべて既読ボタン） -->
+                <div class="px-4 sm:px-6 py-3.5 bg-white/80 dark:bg-misskey-panel/80 backdrop-blur-md border-b border-misskey-lightBorder dark:border-misskey-border flex items-center justify-between shrink-0">
+                    <div>
+                        <h2 id="current-view-title" class="font-bold text-base sm:text-lg text-slate-900 dark:text-white">すべての記事</h2>
+                        <p id="current-view-subtitle" class="text-xs text-slate-500 dark:text-slate-400">購読中のフィードの最新記事</p>
+                    </div>
+                    <button onclick="markAllAsRead()" class="text-xs sm:text-sm px-3 py-1.5 rounded-xl bg-white dark:bg-misskey-bg border border-slate-200 dark:border-misskey-border hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium flex items-center gap-1.5 shadow-2xs">
+                        <i data-lucide="check-check" class="w-4 h-4 text-misskey"></i>
+                        <span>すべて既読にする</span>
+                    </button>
+                </div>
+
+                <!-- 記事リストコンテナ -->
+                <div id="articles-container" class="flex-1 overflow-y-auto p-4 sm:p-6">
+                    <div id="articles-grid" class="max-w-4xl mx-auto space-y-3">
+                        <!-- JSで動的に記事カードを生成 -->
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- ==========================================
+         モーダル1: RSSフィード追加モーダル
+         ========================================== -->
+    <div id="add-feed-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+        <div class="bg-misskey-lightPanel dark:bg-misskey-panel rounded-2xl max-w-md w-full p-6 border border-misskey-lightBorder dark:border-misskey-border shadow-2xl">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <i data-lucide="rss" class="w-5 h-5 text-misskey"></i>
+                    <span>RSSフィードを追加</span>
+                </h3>
+                <button onclick="closeAddFeedModal()" class="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            
+            <form id="add-feed-form" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1.5">RSS / Atom フィードURL</label>
+                    <input 
+                        type="url" 
+                        id="feed-url-input" 
+                        required
+                        placeholder="https://example.com/feed.xml" 
+                        class="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-misskey-bg border border-slate-300 dark:border-misskey-border text-slate-900 dark:text-white focus:ring-2 focus:ring-misskey outline-none text-sm"
+                    >
+                </div>
+
+                <!-- おすすめプリセットフィード -->
+                <div>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mb-2">おすすめフィード（クリックで入力）:</p>
+                    <div class="flex flex-wrap gap-1.5">
+                        <button type="button" onclick="fillFeedPreset('https://zenn.dev/feed')" class="text-xs px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-misskey-bg hover:bg-misskey/15 hover:text-misskey text-slate-700 dark:text-slate-300 font-medium">
+                            Zenn トレンド
+                        </button>
+                        <button type="button" onclick="fillFeedPreset('https://qiita.com/popular-items/feed')" class="text-xs px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-misskey-bg hover:bg-misskey/15 hover:text-misskey text-slate-700 dark:text-slate-300 font-medium">
+                            Qiita 人気記事
+                        </button>
+                        <button type="button" onclick="fillFeedPreset('https://b.hatena.ne.jp/hotentry/it.rss')" class="text-xs px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-misskey-bg hover:bg-misskey/15 hover:text-misskey text-slate-700 dark:text-slate-300 font-medium">
+                            はてブ IT
+                        </button>
+                        <button type="button" onclick="fillFeedPreset('https://www.publickey1.jp/atom.xml')" class="text-xs px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-misskey-bg hover:bg-misskey/15 hover:text-misskey text-slate-700 dark:text-slate-300 font-medium">
+                            Publickey
+                        </button>
+                    </div>
+                </div>
+
+                <div class="flex justify-end gap-2 pt-2">
+                    <button type="button" onclick="closeAddFeedModal()" class="px-4 py-2 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800">
+                        キャンセル
+                    </button>
+                    <button type="submit" id="add-feed-submit-btn" class="px-5 py-2 rounded-xl bg-misskey hover:bg-misskey-hover text-white text-sm font-semibold flex items-center gap-2 shadow-sm">
+                        <span>追加する</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ==========================================
+         モーダル2: 記事詳細ビューア & Misskeyノート投稿モーダル
+         ========================================== -->
+    <div id="article-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
+        <div class="bg-misskey-lightPanel dark:bg-misskey-panel rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col border border-misskey-lightBorder dark:border-misskey-border shadow-2xl overflow-hidden">
+            <!-- モーダルヘッダー -->
+            <div class="px-5 py-3.5 border-b border-misskey-lightBorder dark:border-misskey-border flex items-center justify-between shrink-0 bg-slate-50/50 dark:bg-misskey-bg/30">
+                <span id="modal-feed-title" class="text-xs font-bold px-2.5 py-1 rounded-lg bg-misskey/15 text-misskey truncate max-w-[200px]">
+                    Feed Name
+                </span>
+                <div class="flex items-center gap-1.5">
+                    <button id="modal-star-btn" onclick="toggleCurrentModalStar()" title="お気に入り" class="p-2 rounded-xl hover:bg-slate-200/70 dark:hover:bg-slate-800 text-slate-500">
+                        <i data-lucide="star" class="w-4 h-4"></i>
+                    </button>
+                    <a id="modal-external-link" href="#" target="_blank" rel="noopener noreferrer" title="元記事を開く" class="p-2 rounded-xl hover:bg-slate-200/70 dark:hover:bg-slate-800 text-slate-500">
+                        <i data-lucide="external-link" class="w-4 h-4"></i>
+                    </a>
+                    <button onclick="closeArticleModal()" class="p-2 rounded-xl hover:bg-slate-200/70 dark:hover:bg-slate-800 text-slate-500">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 記事本文エリア -->
+            <div class="p-5 sm:p-6 overflow-y-auto flex-1 space-y-4">
+                <h1 id="modal-article-title" class="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white leading-snug">記事タイトル</h1>
+                <div class="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+                    <span id="modal-article-date" class="flex items-center gap-1">
+                        <i data-lucide="clock" class="w-3.5 h-3.5"></i>
+                        <span>2026-11-19</span>
+                    </span>
+                </div>
+                <div id="modal-article-content" class="max-w-none text-sm sm:text-base text-slate-700 dark:text-slate-300 leading-relaxed pt-3 border-t border-slate-100 dark:border-misskey-border">
+                    <!-- 記事サマリー -->
+                </div>
+            </div>
+
+            <!-- Misskeyへノートするクイックシェアバー -->
+            <div class="p-4 bg-slate-50 dark:bg-misskey-bg border-t border-misskey-lightBorder dark:border-misskey-border shrink-0">
+                <div class="flex flex-col sm:flex-row gap-2">
+                    <input 
+                        type="text" 
+                        id="misskey-note-comment" 
+                        placeholder="感想を添えてMisskeyにノート..." 
+                        class="flex-1 px-3.5 py-2 rounded-xl bg-white dark:bg-misskey-panel border border-slate-300 dark:border-misskey-border text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-misskey outline-none"
+                    >
+                    <button onclick="shareToMisskey()" id="share-misskey-btn" class="px-4 py-2 rounded-xl bg-misskey hover:bg-misskey-hover text-white text-sm font-semibold flex items-center justify-center gap-2 shrink-0 shadow-sm">
+                        <i data-lucide="send" class="w-4 h-4"></i>
+                        <span>Misskeyにノート</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * ============================================================================
+         * MiRSS - Misskey MiAuth連携 RSSリーダー (Light & Dark UI)
+         * ============================================================================
+         */
+
+        // アプリケーション状態管理
+        const state = {
+            user: null,           // { id, name, username, host, avatarUrl, token, isDemo }
+            feeds: [],            // [{ id, title, url }]
+            articles: [],         // [{ id, feedId, title, link, description, pubDate, isRead, isStarred }]
+            currentFilter: 'all', // 'all' | 'unread' | 'starred' | feedId
+            activeArticleId: null
+        };
+
+        const AUTH_STORAGE_KEY = 'mirss_auth_session';
+        const MIAUTH_PENDING_KEY = 'mirss_miauth_pending';
+        const THEME_STORAGE_KEY = 'mirss_theme';
+
+        /**
+         * 初期化処理
+         */
+        window.addEventListener('DOMContentLoaded', async () => {
+            initTheme();
+            lucide.createIcons();
+
+            // 1. URLパラメータにMiAuthのコールバック（session）が含まれているか確認
+            const urlParams = new URLSearchParams(window.location.search);
+            const sessionParam = urlParams.get('session');
+            const pendingDataRaw = localStorage.getItem(MIAUTH_PENDING_KEY);
+
+            if (sessionParam && pendingDataRaw) {
+                try {
+                    const pendingData = JSON.parse(pendingDataRaw);
+                    if (pendingData.sessionId === sessionParam) {
+                        await completeMiAuthCallback(pendingData.host, sessionParam);
+                        return;
+                    }
+                } catch (e) {
+                    console.error('MiAuthコールバック解析エラー:', e);
+                }
+            }
+
+            // 2. 既存のログインセッションを確認
+            const savedAuth = localStorage.getItem(AUTH_STORAGE_KEY);
+            if (savedAuth) {
+                try {
+                    state.user = JSON.parse(savedAuth);
+                    enterApp();
+                    return;
+                } catch (e) {
+                    localStorage.removeItem(AUTH_STORAGE_KEY);
+                }
+            }
+
+            showAuthView();
+        });
+
+        /**
+         * ============================================================================
+         * テーマ管理（ライトモード / ダークモード切り替え）
+         * ============================================================================
+         */
+        function initTheme() {
+            const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+            if (savedTheme === 'light' || savedTheme === 'dark') {
+                setTheme(savedTheme, false);
+            } else {
+                // 未設定時はOSのカラー設定に合わせる
+                const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                setTheme(prefersDark ? 'dark' : 'light', false);
+            }
+        }
+
+        function setTheme(mode, save = true) {
+            const html = document.documentElement;
+            if (mode === 'dark') {
+                html.classList.add('dark');
+            } else {
+                html.classList.remove('dark');
+            }
+
+            if (save) {
+                localStorage.setItem(THEME_STORAGE_KEY, mode);
+            }
+
+            updateThemeToggleButtons(mode);
+        }
+
+        function updateThemeToggleButtons(mode) {
+            // 認証画面のピルボタン更新
+            const authLight = document.getElementById('auth-theme-light');
+            const authDark = document.getElementById('auth-theme-dark');
+            if (authLight && authDark) {
+                if (mode === 'light') {
+                    authLight.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-misskey text-white shadow-xs';
+                    authDark.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-500 hover:text-slate-800';
+                } else {
+                    authDark.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-misskey text-white shadow-xs';
+                    authLight.className = 'flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-400 hover:text-slate-200';
+                }
+            }
+
+            // ナビバーのセグメントボタン更新
+            const navLight = document.getElementById('nav-theme-light');
+            const navDark = document.getElementById('nav-theme-dark');
+            if (navLight && navDark) {
+                if (mode === 'light') {
+                    navLight.className = 'p-1.5 rounded-lg text-xs font-medium bg-white text-amber-500 shadow-2xs';
+                    navDark.className = 'p-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-700';
+                } else {
+                    navDark.className = 'p-1.5 rounded-lg text-xs font-medium bg-misskey-panel text-misskey shadow-2xs';
+                    navLight.className = 'p-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-slate-300';
+                }
+            }
+        }
+
+        /**
+         * ============================================================================
+         * MiAuth 認証ロジック
+         * ============================================================================
+         */
+        function setInstance(domain) {
+            document.getElementById('instance-input').value = domain;
+        }
+
+        function generateUUID() {
+            if (crypto && crypto.randomUUID) {
+                return crypto.randomUUID();
+            }
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        document.getElementById('miauth-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            let rawHost = document.getElementById('instance-input').value.trim();
+            rawHost = rawHost.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+
+            if (!rawHost) {
+                showToast('インスタンスのドメインを入力してください', 'error');
+                return;
+            }
+
+            const sessionId = generateUUID();
+            const appName = encodeURIComponent('MiRSS (RSSリーダー)');
+            const callbackUrl = encodeURIComponent(window.location.origin + window.location.pathname);
+            const permissions = encodeURIComponent('read:account,write:notes');
+
+            localStorage.setItem(MIAUTH_PENDING_KEY, JSON.stringify({
+                host: rawHost,
+                sessionId: sessionId,
+                timestamp: Date.now()
+            }));
+
+            const miAuthUrl = `https://${rawHost}/miauth/${sessionId}?name=${appName}&callback=${callbackUrl}&permission=${permissions}`;
+            
+            showToast(`${rawHost} の認証画面へ移動します...`, 'info');
+            setTimeout(() => {
+                window.location.href = miAuthUrl;
+            }, 400);
+        });
+
+        async function completeMiAuthCallback(host, sessionId) {
+            document.getElementById('miauth-form').classList.add('hidden');
+            document.getElementById('auth-loading').classList.remove('hidden');
+            document.getElementById('auth-loading-host').textContent = `接続先: https://${host}`;
+
+            try {
+                const response = await fetch(`https://${host}/api/miauth/${sessionId}/check`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+
+                if (!response.ok) throw new Error(`HTTPエラー: ${response.status}`);
+                const data = await response.json();
+
+                if (data && data.ok && data.user && data.token) {
+                    state.user = {
+                        id: data.user.id,
+                        name: data.user.name || data.user.username,
+                        username: data.user.username,
+                        host: host,
+                        avatarUrl: data.user.avatarUrl || `https://placehold.co/64x64/86b300/ffffff?text=${data.user.username[0].toUpperCase()}`,
+                        token: data.token,
+                        isDemo: false
+                    };
+
+                    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(state.user));
+                    localStorage.removeItem(MIAUTH_PENDING_KEY);
+                    window.history.replaceState({}, document.title, window.location.pathname);
+
+                    showToast(`ようこそ、${state.user.name} さん！`, 'success');
+                    enterApp();
+                } else {
+                    throw new Error('MiAuthの認証確認に失敗しました。');
+                }
+            } catch (error) {
+                console.error('MiAuth Check Error:', error);
+                localStorage.removeItem(MIAUTH_PENDING_KEY);
+                window.history.replaceState({}, document.title, window.location.pathname);
+
+                document.getElementById('auth-loading').classList.add('hidden');
+                document.getElementById('miauth-form').classList.remove('hidden');
+                showToast(`認証エラー: ${error.message}`, 'error');
+            }
+        }
+
+        function loginDemoMode() {
+            state.user = {
+                id: 'demo_user_001',
+                name: 'みすきーにゃんこ (Demo)',
+                username: 'misskey_cat',
+                host: 'misskey.io',
+                avatarUrl: 'https://placehold.co/80x80/86b300/ffffff?text=Cat',
+                token: 'demo_miauth_token_xyz',
+                isDemo: true
+            };
+            localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(state.user));
+            showToast('デモアカウントでログインしました（右上でライト/ダーク切替可能）', 'success');
+            enterApp();
+        }
+
+        function logout() {
+            localStorage.removeItem(AUTH_STORAGE_KEY);
+            state.user = null;
+            state.feeds = [];
+            state.articles = [];
+            document.getElementById('user-dropdown').classList.add('hidden');
+            showAuthView();
+            showToast('ログアウトしました', 'info');
+        }
+
+        /**
+         * ============================================================================
+         * 画面遷移 & ユーザーデータ管理
+         * ============================================================================
+         */
+        function showAuthView() {
+            document.getElementById('app-view').classList.add('hidden');
+            document.getElementById('auth-view').classList.remove('hidden');
+            document.getElementById('miauth-form').classList.remove('hidden');
+            document.getElementById('auth-loading').classList.add('hidden');
+        }
+
+        function enterApp() {
+            document.getElementById('auth-view').classList.add('hidden');
+            document.getElementById('app-view').classList.remove('hidden');
+
+            const fullHandle = `@${state.user.username}@${state.user.host}`;
+            document.getElementById('user-name').textContent = state.user.name;
+            document.getElementById('user-handle').textContent = fullHandle;
+            document.getElementById('dropdown-name').textContent = state.user.name;
+            document.getElementById('dropdown-handle').textContent = fullHandle;
+            
+            const avatarEl = document.getElementById('user-avatar');
+            avatarEl.src = state.user.avatarUrl;
+            avatarEl.onerror = () => {
+                avatarEl.src = 'https://placehold.co/64x64/86b300/ffffff?text=M';
+            };
+
+            if (state.user.isDemo) {
+                document.getElementById('demo-badge').classList.remove('hidden');
+            } else {
+                document.getElementById('demo-badge').classList.add('hidden');
+            }
+
+            loadUserData();
+            lucide.createIcons();
+        }
+
+        function getUserDataKey() {
+            return `mirss_data_${state.user.username}@${state.user.host}`;
+        }
+
+        function loadUserData() {
+            const raw = localStorage.getItem(getUserDataKey());
+            if (raw) {
+                try {
+                    const parsed = JSON.parse(raw);
+                    state.feeds = parsed.feeds || [];
+                    state.articles = parsed.articles || [];
+                } catch (e) {
+                    console.error('データ読み込みエラー:', e);
+                }
+            }
+
+            if (state.feeds.length === 0) {
+                setupInitialSampleFeeds();
+            } else {
+                renderAll();
+            }
+        }
+
+        function saveUserData() {
+            if (!state.user) return;
+            localStorage.setItem(getUserDataKey(), JSON.stringify({
+                feeds: state.feeds,
+                articles: state.articles
+            }));
+        }
+
+        function setupInitialSampleFeeds() {
+            const sampleFeeds = [
+                { id: 'feed_zenn', title: 'Zenn トレンド', url: 'https://zenn.dev/feed' },
+                { id: 'feed_misskey', title: 'Misskey Hub お知らせ', url: 'https://misskey-hub.net/feed.xml' }
+            ];
+
+            const now = Date.now();
+            const sampleArticles = [
+                {
+                    id: 'art_1',
+                    feedId: 'feed_misskey',
+                    title: 'MiRSSへようこそ！ライトモードとダークモードを切り替えて使えます',
+                    link: 'https://misskey-hub.net/',
+                    description: '右上の太陽・月アイコンからいつでもライトモードとダークモードを切り替えられます。左側の「フィードを追加」ボタンから、お気に入りのブログやニュースサイトのRSS URLを登録して購読を始めましょう。',
+                    pubDate: new Date(now - 1000 * 60 * 25).toISOString(),
+                    isRead: false,
+                    isStarred: true
+                },
+                {
+                    id: 'art_2',
+                    feedId: 'feed_zenn',
+                    title: 'GitHub Pagesで公開する静的WebアプリのMiAuth認証フロー解説',
+                    link: 'https://zenn.dev/',
+                    description: 'サーバーレスなフロントエンド構成（GitHub Pagesなど）でも、MisskeyのMiAuthを使えば安全にアカウント認証・登録とAPI連携が実現できます。',
+                    pubDate: new Date(now - 1000 * 60 * 60 * 2).toISOString(),
+                    isRead: false,
+                    isStarred: false
+                },
+                {
+                    id: 'art_3',
+                    feedId: 'feed_zenn',
+                    title: 'モダンなRSSリーダーのUI設計：未読管理と視認性の高いカードレイアウト',
+                    link: 'https://zenn.dev/',
+                    description: '長時間の閲覧でも目が疲れにくいダークテーマと、日中の屋外でもくっきり読めるライトテーマの両立について解説します。',
+                    pubDate: new Date(now - 1000 * 60 * 60 * 9).toISOString(),
+                    isRead: true,
+                    isStarred: false
+                }
+            ];
+
+            state.feeds = sampleFeeds;
+            state.articles = sampleArticles;
+            saveUserData();
+            renderAll();
+        }
+
+        /**
+         * ============================================================================
+         * RSS フィード取得・パース処理
+         * ============================================================================
+         */
+        async function fetchAndParseRSS(feedUrl) {
+            const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(feedUrl)}`;
+            const response = await fetch(proxyUrl);
+            if (!response.ok) throw new Error('フィードの取得に失敗しました');
+
+            const data = await response.json();
+            if (!data.contents) throw new Error('フィードの内容が空です');
+
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(data.contents, 'text/xml');
+
+            if (xmlDoc.querySelector('parsererror')) {
+                throw new Error('有効なRSS/Atom形式ではありません');
+            }
+
+            const isAtom = xmlDoc.querySelector('feed') !== null;
+            let feedTitle = '';
+            const items = [];
+
+            if (isAtom) {
+                feedTitle = xmlDoc.querySelector('feed > title')?.textContent?.trim() || feedUrl;
+                xmlDoc.querySelectorAll('entry').forEach((entry, idx) => {
+                    if (idx >= 15) return;
+                    const title = entry.querySelector('title')?.textContent?.trim() || '無題の記事';
+                    const linkEl = entry.querySelector('link[rel="alternate"]') || entry.querySelector('link');
+                    const link = linkEl?.getAttribute('href') || '';
+                    const summary = entry.querySelector('summary, content')?.textContent || '';
+                    const updated = entry.querySelector('published, updated')?.textContent || new Date().toISOString();
+                    const id = entry.querySelector('id')?.textContent || link || `${feedUrl}_${idx}`;
+
+                    items.push({
+                        id: btoa(encodeURIComponent(id)).slice(0, 32),
+                        title,
+                        link,
+                        description: stripHtml(summary).slice(0, 400) + (stripHtml(summary).length > 400 ? '...' : ''),
+                        pubDate: new Date(updated).toISOString()
+                    });
+                });
+            } else {
+                feedTitle = xmlDoc.querySelector('channel > title')?.textContent?.trim() || feedUrl;
+                xmlDoc.querySelectorAll('item').forEach((item, idx) => {
+                    if (idx >= 15) return;
+                    const title = item.querySelector('title')?.textContent?.trim() || '無題の記事';
+                    const link = item.querySelector('link')?.textContent?.trim() || '';
+                    const desc = item.querySelector('description')?.textContent || '';
+                    const pubDateRaw = item.querySelector('pubDate')?.textContent || item.getElementsByTagName('dc:date')[0]?.textContent || new Date().toISOString();
+                    const guid = item.querySelector('guid')?.textContent || link || `${feedUrl}_${idx}`;
+
+                    items.push({
+                        id: btoa(encodeURIComponent(guid)).slice(0, 32),
+                        title,
+                        link,
+                        description: stripHtml(desc).slice(0, 400) + (stripHtml(desc).length > 400 ? '...' : ''),
+                        pubDate: new Date(pubDateRaw).toISOString()
+                    });
+                });
+            }
+
+            return { feedTitle, items };
+        }
+
+        function stripHtml(html) {
+            const tmp = document.createElement('div');
+            tmp.innerHTML = html;
+            return (tmp.textContent || tmp.innerText || '').replace(/\s+/g, ' ').trim();
+        }
+
+        document.getElementById('add-feed-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const urlInput = document.getElementById('feed-url-input');
+            const feedUrl = urlInput.value.trim();
+            if (!feedUrl) return;
+
+            if (state.feeds.some(f => f.url === feedUrl)) {
+                showToast('このフィードは既に登録されています', 'error');
+                return;
+            }
+
+            const submitBtn = document.getElementById('add-feed-submit-btn');
+            const originalText = submitBtn.innerHTML;
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `<div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div><span>取得中...</span>`;
+
+            try {
+                const { feedTitle, items } = await fetchAndParseRSS(feedUrl);
+                const newFeedId = 'feed_' + Date.now();
+
+                state.feeds.push({ id: newFeedId, title: feedTitle, url: feedUrl });
+
+                items.forEach(item => {
+                    if (!state.articles.some(a => a.link === item.link && a.feedId === newFeedId)) {
+                        state.articles.push({
+                            ...item,
+                            feedId: newFeedId,
+                            isRead: false,
+                            isStarred: false
+                        });
+                    }
+                });
+
+                saveUserData();
+                renderAll();
+                closeAddFeedModal();
+                urlInput.value = '';
+                showToast(`「${feedTitle}」を追加しました`, 'success');
+            } catch (error) {
+                showToast(`取得失敗: ${error.message}`, 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = originalText;
+            }
+        });
+
+        async function refreshAllFeeds() {
+            if (state.feeds.length === 0) return;
+
+            const btn = document.getElementById('refresh-btn');
+            btn.classList.add('animate-spin', 'text-misskey');
+            showToast('フィードを更新しています...', 'info');
+
+            let addedCount = 0;
+            for (const feed of state.feeds) {
+                try {
+                    const { items } = await fetchAndParseRSS(feed.url);
+                    items.forEach(item => {
+                        const exists = state.articles.some(a => a.feedId === feed.id && (a.id === item.id || a.link === item.link));
+                        if (!exists) {
+                            state.articles.push({
+                                ...item,
+                                feedId: feed.id,
+                                isRead: false,
+                                isStarred: false
+                            });
+                            addedCount++;
+                        }
+                    });
+                } catch (e) {
+                    console.warn(`フィード更新スキップ (${feed.title}):`, e);
+                }
+            }
+
+            btn.classList.remove('animate-spin', 'text-misskey');
+            saveUserData();
+            renderAll();
+            showToast(addedCount > 0 ? `${addedCount}件の新しい記事を取得しました！` : '最新の状態です', 'success');
+        }
+
+        function deleteFeed(feedId, event) {
+            event.stopPropagation();
+            const feed = state.feeds.find(f => f.id === feedId);
+            if (!feed) return;
+
+            state.feeds = state.feeds.filter(f => f.id !== feedId);
+            state.articles = state.articles.filter(a => a.feedId !== feedId);
+            if (state.currentFilter === feedId) state.currentFilter = 'all';
+
+            saveUserData();
+            renderAll();
+            showToast(`「${feed.title}」を削除しました`, 'info');
+        }
+
+        /**
+         * ============================================================================
+         * UI レンダリング & インタラクション
+         * ============================================================================
+         */
+        function renderAll() {
+            renderSidebar();
+            renderArticles();
+        }
+
+        function renderSidebar() {
+            document.getElementById('count-all').textContent = state.articles.length;
+            document.getElementById('count-unread').textContent = state.articles.filter(a => !a.isRead).length;
+            document.getElementById('count-starred').textContent = state.articles.filter(a => a.isStarred).length;
+
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.classList.remove('bg-misskey/15', 'text-misskey', 'font-semibold');
+                btn.classList.add('text-slate-600', 'dark:text-slate-300', 'hover:bg-slate-100', 'dark:hover:bg-slate-800', 'font-medium');
+            });
+
+            const activeFilterBtn = document.getElementById(`filter-${state.currentFilter}`);
+            if (activeFilterBtn) {
+                activeFilterBtn.classList.add('bg-misskey/15', 'text-misskey', 'font-semibold');
+                activeFilterBtn.classList.remove('text-slate-600', 'dark:text-slate-300', 'hover:bg-slate-100', 'dark:hover:bg-slate-800', 'font-medium');
+            }
+
+            const feedListEl = document.getElementById('feed-list');
+            feedListEl.innerHTML = '';
+
+            if (state.feeds.length === 0) {
+                feedListEl.innerHTML = `<p class="text-xs text-slate-400 px-3 py-2">フィードが登録されていません</p>`;
+                return;
+            }
+
+            state.feeds.forEach(feed => {
+                const feedUnread = state.articles.filter(a => a.feedId === feed.id && !a.isRead).length;
+                const isActive = state.currentFilter === feed.id;
+
+                const itemEl = document.createElement('div');
+                itemEl.onclick = () => selectFilter(feed.id);
+                itemEl.className = `group flex items-center justify-between px-3 py-2 rounded-xl text-sm cursor-pointer ${
+                    isActive 
+                    ? 'bg-misskey/15 text-misskey font-semibold' 
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`;
+
+                itemEl.innerHTML = `
+                    <div class="flex items-center gap-2.5 min-w-0 flex-1">
+                        <i data-lucide="rss" class="w-3.5 h-3.5 shrink-0 ${isActive ? 'text-misskey' : 'text-slate-400'}"></i>
+                        <span class="truncate">${escapeHtml(feed.title)}</span>
+                    </div>
+                    <div class="flex items-center gap-1.5 ml-2 shrink-0">
+                        ${feedUnread > 0 ? `<span class="text-xs px-1.5 py-0.5 rounded-full bg-misskey/20 text-misskey font-bold">${feedUnread}</span>` : ''}
+                        <button onclick="deleteFeed('${feed.id}', event)" title="フィードを削除" class="opacity-0 group-hover:opacity-100 p-1 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/40 text-slate-400 hover:text-red-500">
+                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                        </button>
+                    </div>
+                `;
+                feedListEl.appendChild(itemEl);
+            });
+
+            lucide.createIcons();
+        }
+
+        function renderArticles() {
+            const searchQuery = document.getElementById('search-input').value.toLowerCase().trim();
+            
+            let filtered = state.articles.filter(article => {
+                if (state.currentFilter === 'unread' && article.isRead) return false;
+                if (state.currentFilter === 'starred' && !article.isStarred) return false;
+                if (!['all', 'unread', 'starred'].includes(state.currentFilter) && article.feedId !== state.currentFilter) {
+                    return false;
+                }
+                if (searchQuery) {
+                    return article.title.toLowerCase().includes(searchQuery) || article.description.toLowerCase().includes(searchQuery);
+                }
+                return true;
+            });
+
+            filtered.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+
+            const titleEl = document.getElementById('current-view-title');
+            const subEl = document.getElementById('current-view-subtitle');
+            if (state.currentFilter === 'all') {
+                titleEl.textContent = 'すべての記事';
+                subEl.textContent = `全 ${filtered.length} 件の記事`;
+            } else if (state.currentFilter === 'unread') {
+                titleEl.textContent = '未読の記事';
+                subEl.textContent = `未読 ${filtered.length} 件`;
+            } else if (state.currentFilter === 'starred') {
+                titleEl.textContent = 'お気に入り';
+                subEl.textContent = `保存済み ${filtered.length} 件`;
+            } else {
+                const feed = state.feeds.find(f => f.id === state.currentFilter);
+                titleEl.textContent = feed ? feed.title : 'フィード';
+                subEl.textContent = feed ? feed.url : '';
+            }
+
+            const gridEl = document.getElementById('articles-grid');
+            gridEl.innerHTML = '';
+
+            if (filtered.length === 0) {
+                gridEl.innerHTML = `
+                    <div class="text-center py-16 px-4 bg-misskey-lightPanel dark:bg-misskey-panel rounded-2xl border border-misskey-lightBorder dark:border-misskey-border shadow-2xs">
+                        <div class="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-400 mb-3">
+                            <i data-lucide="inbox" class="w-6 h-6"></i>
+                        </div>
+                        <p class="font-semibold text-slate-700 dark:text-slate-300">表示する記事がありません</p>
+                        <p class="text-xs text-slate-500 mt-1">新しいRSSフィードを追加するか、フィルターを変更してみてください。</p>
+                    </div>
+                `;
+                lucide.createIcons();
+                return;
+            }
+
+            filtered.forEach(article => {
+                const feed = state.feeds.find(f => f.id === article.feedId);
+                const feedName = feed ? feed.title : '不明なフィード';
+                const dateStr = formatRelativeDate(article.pubDate);
+
+                const card = document.createElement('article');
+                card.onclick = () => openArticleModal(article.id);
+                card.className = `group relative bg-misskey-lightPanel dark:bg-misskey-panel rounded-2xl p-4 sm:p-5 border cursor-pointer hover:shadow-md ${
+                    article.isRead 
+                    ? 'border-misskey-lightBorder/80 dark:border-misskey-border/60 opacity-75' 
+                    : 'border-misskey-lightBorder dark:border-misskey-border shadow-2xs border-l-4 border-l-misskey'
+                }`;
+
+                card.innerHTML = `
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="space-y-1.5 min-w-0 flex-1">
+                            <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                                <span class="font-bold text-misskey truncate max-w-[180px]">${escapeHtml(feedName)}</span>
+                                <span>•</span>
+                                <span class="shrink-0">${dateStr}</span>
+                            </div>
+                            <h3 class="text-base sm:text-lg font-bold leading-snug group-hover:text-misskey ${article.isRead ? 'font-semibold text-slate-700 dark:text-slate-300' : 'text-slate-900 dark:text-white'}">
+                                ${escapeHtml(article.title)}
+                            </h3>
+                            <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-400 line-clamp-2 leading-relaxed">
+                                ${escapeHtml(article.description || '概要テキストはありません。クリックして詳細を表示します。')}
+                            </p>
+                        </div>
+
+                        <!-- アクションボタン -->
+                        <div class="flex flex-col sm:flex-row items-center gap-1 shrink-0">
+                            <button onclick="toggleStar('${article.id}', event)" title="お気に入り" class="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 ${article.isStarred ? 'text-amber-400' : 'text-slate-400'}">
+                                <i data-lucide="star" class="w-4 h-4 ${article.isStarred ? 'fill-amber-400' : ''}"></i>
+                            </button>
+                            <button onclick="toggleRead('${article.id}', event)" title="${article.isRead ? '未読にする' : '既読にする'}" class="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-misskey">
+                                <i data-lucide="${article.isRead ? 'circle' : 'check-circle-2'}" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+                gridEl.appendChild(card);
+            });
+
+            lucide.createIcons();
+        }
+
+        function selectFilter(filter) {
+            state.currentFilter = filter;
+            renderAll();
+            if (window.innerWidth < 1024) {
+                const sidebar = document.getElementById('sidebar');
+                if (!sidebar.classList.contains('-translate-x-full')) {
+                    toggleSidebar();
+                }
+            }
+        }
+
+        function toggleRead(articleId, event) {
+            if (event) event.stopPropagation();
+            const article = state.articles.find(a => a.id === articleId);
+            if (article) {
+                article.isRead = !article.isRead;
+                saveUserData();
+                renderAll();
+            }
+        }
+
+        function markAllAsRead() {
+            let changed = false;
+            state.articles.forEach(a => {
+                if (state.currentFilter === 'all' || state.currentFilter === 'unread' || a.feedId === state.currentFilter) {
+                    if (!a.isRead) {
+                        a.isRead = true;
+                        changed = true;
+                    }
+                }
+            });
+            if (changed) {
+                saveUserData();
+                renderAll();
+                showToast('すべての記事を既読にしました', 'success');
+            }
+        }
+
+        function toggleStar(articleId, event) {
+            if (event) event.stopPropagation();
+            const article = state.articles.find(a => a.id === articleId);
+            if (article) {
+                article.isStarred = !article.isStarred;
+                saveUserData();
+                renderAll();
+                if (state.activeArticleId === articleId) {
+                    updateModalStarIcon(article.isStarred);
+                }
+            }
+        }
+
+        /**
+         * ============================================================================
+         * モーダル操作 & Misskeyへのノート投稿機能
+         * ============================================================================
+         */
+        function openAddFeedModal() {
+            document.getElementById('add-feed-modal').classList.remove('hidden');
+            document.getElementById('feed-url-input').focus();
+        }
+
+        function closeAddFeedModal() {
+            document.getElementById('add-feed-modal').classList.add('hidden');
+        }
+
+        function fillFeedPreset(url) {
+            document.getElementById('feed-url-input').value = url;
+        }
+
+        function openArticleModal(articleId) {
+            const article = state.articles.find(a => a.id === articleId);
+            if (!article) return;
+
+            state.activeArticleId = articleId;
+
+            if (!article.isRead) {
+                article.isRead = true;
+                saveUserData();
+                renderAll();
+            }
+
+            const feed = state.feeds.find(f => f.id === article.feedId);
+            document.getElementById('modal-feed-title').textContent = feed ? feed.title : 'RSSフィード';
+            document.getElementById('modal-article-title').textContent = article.title;
+            document.getElementById('modal-article-date').innerHTML = `<i data-lucide="clock" class="w-3.5 h-3.5"></i><span>${new Date(article.pubDate).toLocaleString('ja-JP')}</span>`;
+            document.getElementById('modal-article-content').textContent = article.description || '本文のプレビューがありません。「元記事を開く」から全文をご覧ください。';
+            document.getElementById('modal-external-link').href = article.link;
+            document.getElementById('misskey-note-comment').value = '';
+
+            updateModalStarIcon(article.isStarred);
+            document.getElementById('article-modal').classList.remove('hidden');
+            lucide.createIcons();
+        }
+
+        function closeArticleModal() {
+            document.getElementById('article-modal').classList.add('hidden');
+            state.activeArticleId = null;
+        }
+
+        function toggleCurrentModalStar() {
+            if (state.activeArticleId) {
+                toggleStar(state.activeArticleId);
+            }
+        }
+
+        function updateModalStarIcon(isStarred) {
+            const btn = document.getElementById('modal-star-btn');
+            if (isStarred) {
+                btn.classList.add('text-amber-400');
+                btn.classList.remove('text-slate-500');
+                btn.innerHTML = `<i data-lucide="star" class="w-4 h-4 fill-amber-400"></i>`;
+            } else {
+                btn.classList.remove('text-amber-400');
+                btn.classList.add('text-slate-500');
+                btn.innerHTML = `<i data-lucide="star" class="w-4 h-4"></i>`;
+            }
+            lucide.createIcons();
+        }
+
+        async function shareToMisskey() {
+            const article = state.articles.find(a => a.id === state.activeArticleId);
+            if (!article || !state.user) return;
+
+            const comment = document.getElementById('misskey-note-comment').value.trim();
+            const noteText = `${comment ? comment + '\n\n' : ''}${article.title}\n${article.link}`;
+
+            const btn = document.getElementById('share-misskey-btn');
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = `<div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div><span>送信中...</span>`;
+
+            try {
+                if (state.user.isDemo) {
+                    await new Promise(r => setTimeout(r, 500));
+                    showToast('【デモ】Misskeyにノートを投稿しました！', 'success');
+                    document.getElementById('misskey-note-comment').value = '';
+                } else {
+                    const res = await fetch(`https://${state.user.host}/api/notes/create`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ i: state.user.token, text: noteText })
+                    });
+                    if (!res.ok) throw new Error(`APIエラー (${res.status})`);
+                    showToast(`${state.user.host} にノートを投稿しました！`, 'success');
+                    document.getElementById('misskey-note-comment').value = '';
+                }
+            } catch (error) {
+                showToast(`ノート投稿に失敗しました: ${error.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+                lucide.createIcons();
+            }
+        }
+
+        /**
+         * ============================================================================
+         * ユーティリティ
+         * ============================================================================
+         */
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebar-overlay');
+            sidebar.classList.toggle('-translate-x-full');
+            overlay.classList.toggle('hidden');
+        }
+
+        function toggleUserDropdown() {
+            document.getElementById('user-dropdown').classList.toggle('hidden');
+        }
+
+        window.addEventListener('click', (e) => {
+            const container = document.getElementById('user-menu-container');
+            if (container && !container.contains(e.target)) {
+                document.getElementById('user-dropdown').classList.add('hidden');
+            }
+        });
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            
+            const colors = {
+                success: 'bg-misskey text-white',
+                error: 'bg-red-600 text-white',
+                info: 'bg-slate-800 dark:bg-slate-700 text-white'
+            };
+
+            const icons = {
+                success: 'check-circle',
+                error: 'alert-circle',
+                info: 'info'
+            };
+
+            toast.className = `${colors[type] || colors.info} px-4 py-3 rounded-xl shadow-lg flex items-center gap-2.5 text-sm font-medium pointer-events-auto transform transition-all duration-300 translate-y-2 opacity-0`;
+            toast.innerHTML = `
+                <i data-lucide="${icons[type] || 'info'}" class="w-4 h-4 shrink-0"></i>
+                <span>${escapeHtml(message)}</span>
+            `;
+
+            container.appendChild(toast);
+            lucide.createIcons();
+
+            requestAnimationFrame(() => {
+                toast.classList.remove('translate-y-2', 'opacity-0');
+            });
+
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-y-2');
+                setTimeout(() => toast.remove(), 300);
+            }, 3500);
+        }
+
+        function formatRelativeDate(isoString) {
+            const date = new Date(isoString);
+            if (isNaN(date.getTime())) return '';
+            const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
+
+            if (diffSec < 60) return 'たった今';
+            if (diffSec < 3600) return `${Math.floor(diffSec / 60)}分前`;
+            if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}時間前`;
+            if (diffSec < 86400 * 7) return `${Math.floor(diffSec / 86400)}日前`;
+            return date.toLocaleDateString('ja-JP');
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+    </script>
+</body>
+</html>
